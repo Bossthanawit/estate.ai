@@ -1,74 +1,145 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { searchPropertiesServer, type SearchFilters } from "@/lib/properties.functions";
+import { supabaseAdmin } from "@/integrations/supabase/client.server";
 
 const SYSTEM_PROMPT = `You are "Estate AI", a warm, professional Bangkok real estate consultant.
 
 Language:
-- ALWAYS detect the language the user is writing in and reply in that same language.
-- If the user switches language, switch with them. Never force English.
-- Keep the same warm, professional tone in every language (Thai, English, Chinese, Japanese, etc.).
-
-Your job: help the user discover properties that fit their location, budget, transport, and lifestyle needs.
+- Detect the user's language (Thai, English, Chinese, Japanese...) and reply in that language. Mirror language switches.
 
 Style:
-- Conversational and brief (2-4 short sentences max per turn).
-- Ask ONE clarifying question at a time, never overwhelm.
-- Sound like a friendly human consultant, not a robot.
-- Use markdown sparingly (bold for key points, simple lists when helpful).
+- Warm, conversational, brief (2-4 short sentences).
+- Ask ONE clarifying question at a time.
+- Use markdown sparingly (bold for key points).
 
 Behavior:
-- Greet only on the very first turn.
-- If the user mentions an area (Siam, Asok, Chula, Sathorn, Thonglor, Ari, Phrom Phong, ICONSIAM, Lat Phrao, Rangsit, etc.), acknowledge that the property panel on the right is now showing matching listings, and ask a follow-up about budget, bedrooms, or commute.
-- If the user gives a budget, confirm and ask about location or commute.
-- If they mention BTS/MRT, prioritize transit-connected suggestions.
-- Always nudge toward narrowing down: budget, bedrooms, lifestyle, near work/uni.
-- When you have enough info, summarize what you understood and tell them to look at the recommended cards.
-
-Never invent specific property names — refer generically ("the units shown on the right", "your top match"). The UI handles listings.`;
+- Greet only on the first turn.
+- Acknowledge what we learned from the user (area, budget, type, bedrooms, transit/lifestyle preferences).
+- The system will pre-filter the property database for you. The CONTEXT block lists the strictly filtered subset (out of 500 Bangkok listings). Refer to those listings only — never invent property names. Say things like "the matches on the right".
+- Always nudge the user toward narrowing down further (budget, bedrooms, commute, lifestyle) until you have enough criteria.
+- If filtered count is small (< 6), summarize what fits and offer next steps (book viewing, save favorites).
+- If filtered count is 0, gently suggest relaxing one criterion.`;
 
 type Msg = { role: "user" | "assistant"; content: string };
+type ReqBody = { messages: Msg[]; filters?: SearchFilters; sessionId?: string | null };
+
+const FILTER_EXTRACTOR_PROMPT = `You convert a Bangkok real-estate chat into JSON filters.
+Return ONLY a compact JSON object (no prose, no fences) with any of these keys when the user expressed them:
+- area: string (a Bangkok district name, e.g. "Asok","Thonglor","Kaset","Silom","Sathorn","Siam","Chidlom","Ari","Phrom Phong","Ekkamai","Bang Na","Lat Phrao","Ratchada","Huai Khwang","Bang Sue","Chatuchak","Ramkhamhaeng","Bang Kapi","Thonburi","Bang Rak","Pinklao","On Nut","Udom Suk","Rangsit")
+- propertyType: "condo"|"house"|"townhouse"|"commercial"
+- listingType: "rent"|"sale"
+- minPrice: number (THB)
+- maxPrice: number (THB)
+- bedrooms: integer
+- nearTransit: true (BTS/MRT)
+- nearUniversity: true
+- nearMall: true
+- availability: "available"|"reserved"|"sold"
+Merge with these previous filters and KEEP previous values when the user did not change them: __PREV__
+Return JSON only.`;
+
+async function callLovable(model: string, messages: Array<{ role: string; content: string }>, opts?: { stream?: boolean }) {
+  const key = process.env.LOVABLE_API_KEY;
+  if (!key) throw new Error("LOVABLE_API_KEY missing");
+  const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model, messages, stream: opts?.stream ?? false }),
+  });
+  return resp;
+}
+
+async function extractFilters(messages: Msg[], prev: SearchFilters): Promise<SearchFilters> {
+  const lastUser = [...messages].reverse().find((m) => m.role === "user");
+  if (!lastUser) return prev;
+  const sys = FILTER_EXTRACTOR_PROMPT.replace("__PREV__", JSON.stringify(prev ?? {}));
+  const r = await callLovable("google/gemini-2.5-flash-lite", [
+    { role: "system", content: sys },
+    { role: "user", content: lastUser.content },
+  ]);
+  if (!r.ok) return prev;
+  const j = await r.json();
+  const text: string = j.choices?.[0]?.message?.content ?? "";
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) return prev;
+  try {
+    const parsed = JSON.parse(m[0]);
+    return { ...prev, ...parsed };
+  } catch {
+    return prev;
+  }
+}
+
+function summarizeProperty(p: any) {
+  return `- ${p.name} | ${p.area_name} | ${p.propertyType} ${p.bedrooms}bd | ฿${p.price.toLocaleString()}${p.listingType === "rent" ? "/mo" : ""} | ${p.availability}`;
+}
 
 export const Route = createFileRoute("/api/chat")({
   server: {
     handlers: {
       POST: async ({ request }) => {
         try {
-          const { messages } = (await request.json()) as { messages: Msg[] };
-          const LOVABLE_API_KEY = process.env.LOVABLE_API_KEY;
-          if (!LOVABLE_API_KEY) {
-            return new Response(JSON.stringify({ error: "AI not configured" }), { status: 500 });
+          const body = (await request.json()) as ReqBody;
+          const messages = body.messages ?? [];
+          const prevFilters: SearchFilters = body.filters ?? {};
+          const sessionId = body.sessionId ?? null;
+
+          // 1. Extract filters from latest user turn (MCP-style progressive narrowing)
+          const newFilters = await extractFilters(messages, prevFilters);
+
+          // 2. Query DB with new filters — only filtered subset enters LLM context
+          const { properties, total } = await searchPropertiesServer({ ...newFilters, limit: 12 });
+
+          // 3. Persist log (best-effort)
+          if (sessionId) {
+            const lastUser = [...messages].reverse().find((m) => m.role === "user");
+            if (lastUser) {
+              supabaseAdmin
+                .from("chat_logs")
+                .insert({ session_id: sessionId, role: "user", content: lastUser.content, filters_applied: newFilters })
+                .then(() => undefined, () => undefined);
+            }
           }
 
-          const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${LOVABLE_API_KEY}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              model: "google/gemini-2.5-flash",
-              messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages],
-              stream: true,
-            }),
-          });
+          const ctx =
+            properties.length === 0
+              ? "(no matching properties yet)"
+              : properties.map(summarizeProperty).join("\n");
+          const contextNote = `\n\nCONTEXT (top ${properties.length} of ${total} matches after filtering):\n${ctx}\nCURRENT FILTERS: ${JSON.stringify(newFilters)}`;
 
-          if (!resp.ok) {
-            if (resp.status === 429) {
-              return new Response(JSON.stringify({ error: "Rate limit reached, please wait a moment." }), { status: 429 });
-            }
-            if (resp.status === 402) {
-              return new Response(JSON.stringify({ error: "AI credits exhausted. Add credits in workspace settings." }), { status: 402 });
-            }
-            const t = await resp.text();
-            console.error("AI gateway error", resp.status, t);
+          const fullMessages = [
+            { role: "system", content: SYSTEM_PROMPT + contextNote },
+            ...messages,
+          ];
+
+          const resp = await callLovable("google/gemini-2.5-flash", fullMessages, { stream: true });
+          if (!resp.ok || !resp.body) {
+            if (resp.status === 429) return new Response(JSON.stringify({ error: "Rate limit reached" }), { status: 429 });
+            if (resp.status === 402) return new Response(JSON.stringify({ error: "AI credits exhausted" }), { status: 402 });
             return new Response(JSON.stringify({ error: "AI gateway error" }), { status: 500 });
           }
 
-          return new Response(resp.body, {
-            headers: { "Content-Type": "text/event-stream" },
+          // Wrap stream: send a leading `event: filters` then forward chunks
+          const filtersEvent = `event: filters\ndata: ${JSON.stringify({ filters: newFilters, total })}\n\n`;
+          const upstream = resp.body;
+          const stream = new ReadableStream({
+            async start(controller) {
+              const enc = new TextEncoder();
+              controller.enqueue(enc.encode(filtersEvent));
+              const reader = upstream.getReader();
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                controller.enqueue(value);
+              }
+              controller.close();
+            },
           });
+
+          return new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
         } catch (e) {
           console.error("chat handler error", e);
-          return new Response(JSON.stringify({ error: "Server error" }), { status: 500 });
+          return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Server error" }), { status: 500 });
         }
       },
     },

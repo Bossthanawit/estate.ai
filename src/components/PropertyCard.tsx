@@ -12,7 +12,8 @@ type Props = {
 };
 
 export function PropertyCard({ property, isFavorite, onToggleFavorite, onFocus, highlighted }: Props) {
-  const transit = property.nearby.find(n => n.type === "BTS" || n.type === "MRT");
+  const transit = property.nearby.find((n) => n.type === "BTS" || n.type === "MRT");
+  const soldOut = property.availability !== "available";
   return (
     <div
       onClick={() => onFocus(property.id)}
