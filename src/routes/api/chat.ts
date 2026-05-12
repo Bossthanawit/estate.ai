@@ -196,12 +196,35 @@ export const Route = createFileRoute("/api/chat")({
               const enc = new TextEncoder();
               controller.enqueue(enc.encode(filtersEvent));
               const reader = upstream.getReader();
+              const dec = new TextDecoder();
+              let assistantText = "";
+              let buf = "";
               while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
                 controller.enqueue(value);
+                buf += dec.decode(value, { stream: true });
+                let nl: number;
+                while ((nl = buf.indexOf("\n")) !== -1) {
+                  const line = buf.slice(0, nl).trim();
+                  buf = buf.slice(nl + 1);
+                  if (!line.startsWith("data: ")) continue;
+                  const payload = line.slice(6).trim();
+                  if (payload === "[DONE]") continue;
+                  try {
+                    const parsed = JSON.parse(payload);
+                    const c = parsed.choices?.[0]?.delta?.content as string | undefined;
+                    if (c) assistantText += c;
+                  } catch { /* noop */ }
+                }
               }
               controller.close();
+              if (sessionId && assistantText.trim()) {
+                supabaseAdmin
+                  .from("chat_logs")
+                  .insert({ session_id: sessionId, role: "assistant", content: assistantText, filters_applied: newFilters as any })
+                  .then(() => undefined, () => undefined);
+              }
             },
           });
 
