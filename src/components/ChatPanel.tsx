@@ -50,7 +50,6 @@ export function ChatPanel({
     setBusy(true);
 
     let acc = "";
-    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
     await streamChat({
       messages: next,
       filters,
@@ -61,13 +60,18 @@ export function ChatPanel({
       },
       onDelta: (chunk) => {
         acc += chunk;
-        setMessages((prev) => prev.map((m, i) => (i === prev.length - 1 ? { ...m, content: acc } : m)));
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.role === "assistant" && last.content !== undefined && prev.length > next.length) {
+            return prev.map((m, i) => (i === prev.length - 1 ? { ...m, content: acc } : m));
+          }
+          return [...prev, { role: "assistant", content: acc }];
+        });
       },
       onDone: () => setBusy(false),
       onError: (err) => {
         setBusy(false);
         toast.error(err);
-        setMessages((prev) => prev.slice(0, -1));
       },
     });
   };
@@ -108,10 +112,10 @@ export function ChatPanel({
             </div>
           </div>
         ))}
-        {busy && messages[messages.length - 1]?.content === "" && (
+        {busy && messages[messages.length - 1]?.role === "user" && (
           <div className="flex justify-start">
             <div className="rounded-2xl rounded-bl-sm bg-secondary px-4 py-2.5 text-sm italic text-muted-foreground">
-              typing<span className="typing-ellipsis" />
+              <span className="typing-ellipsis">typing</span>
             </div>
           </div>
         )}
