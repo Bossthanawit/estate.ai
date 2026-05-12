@@ -50,7 +50,6 @@ export function ChatPanel({
     setBusy(true);
 
     let acc = "";
-    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
     await streamChat({
       messages: next,
       filters,
@@ -61,31 +60,36 @@ export function ChatPanel({
       },
       onDelta: (chunk) => {
         acc += chunk;
-        setMessages((prev) => prev.map((m, i) => (i === prev.length - 1 ? { ...m, content: acc } : m)));
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.role === "assistant" && last.content !== undefined && prev.length > next.length) {
+            return prev.map((m, i) => (i === prev.length - 1 ? { ...m, content: acc } : m));
+          }
+          return [...prev, { role: "assistant", content: acc }];
+        });
       },
       onDone: () => setBusy(false),
       onError: (err) => {
         setBusy(false);
         toast.error(err);
-        setMessages((prev) => prev.slice(0, -1));
       },
     });
   };
 
   return (
     <div className="flex h-full flex-col rounded-2xl bg-card border border-border overflow-hidden" style={{ boxShadow: "var(--shadow-elegant)" }}>
-      <div className="flex items-center gap-3 border-b border-border px-5 py-4" style={{ background: "var(--gradient-hero)" }}>
-        <div className="grid h-10 w-10 place-items-center rounded-full bg-white/15 backdrop-blur">
-          <Building2 className="h-5 w-5 text-white" />
+      <div className="flex items-center gap-3 border-b border-border bg-card px-5 py-4" style={{ backgroundImage: "var(--gradient-gloss)" }}>
+        <div className="grid h-10 w-10 place-items-center rounded-full bg-primary text-primary-foreground">
+          <Building2 className="h-5 w-5" />
         </div>
         <div className="flex-1">
-          <div className="font-serif text-base font-semibold text-white">Estate AI</div>
-          <div className="flex items-center gap-1.5 text-xs text-white/70">
-            <span className="h-2 w-2 rounded-full bg-green-400" />
+          <div className="font-serif text-base font-semibold text-foreground">Estate AI</div>
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="h-2 w-2 rounded-full bg-green-500" />
             500 Bangkok listings · MCP-powered filtering
           </div>
         </div>
-        <Sparkles className="h-4 w-4 text-accent" />
+        <Sparkles className="h-4 w-4 text-muted-foreground" />
       </div>
 
       <div ref={scrollRef} className="chat-scroll flex-1 space-y-4 overflow-y-auto px-5 py-5">
@@ -108,10 +112,10 @@ export function ChatPanel({
             </div>
           </div>
         ))}
-        {busy && messages[messages.length - 1]?.content === "" && (
+        {busy && messages[messages.length - 1]?.role === "user" && (
           <div className="flex justify-start">
             <div className="rounded-2xl rounded-bl-sm bg-secondary px-4 py-2.5 text-sm italic text-muted-foreground">
-              typing<span className="typing-ellipsis" />
+              <span className="typing-ellipsis">typing</span>
             </div>
           </div>
         )}
@@ -145,11 +149,10 @@ export function ChatPanel({
         <button
           type="submit"
           disabled={busy || !input.trim()}
-          className="grid h-10 w-10 place-items-center rounded-full text-primary-foreground transition hover:scale-105 disabled:opacity-40"
-          style={{ background: "var(--gradient-accent)" }}
+          className="grid h-10 w-10 place-items-center rounded-full bg-primary text-primary-foreground transition hover:scale-105 disabled:opacity-40"
           aria-label="Send"
         >
-          <Send className="h-4 w-4 text-primary" />
+          <Send className="h-4 w-4" />
         </button>
       </form>
     </div>

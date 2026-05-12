@@ -78,7 +78,7 @@ function Index() {
       <header className="sticky top-0 z-30 border-b border-border bg-background/80 backdrop-blur">
         <div className="mx-auto flex max-w-[1600px] items-center justify-between px-6 py-4">
           <div className="flex items-center gap-2.5">
-            <div className="grid h-9 w-9 place-items-center rounded-xl text-primary-foreground" style={{ background: "var(--gradient-hero)" }}>
+            <div className="grid h-9 w-9 place-items-center rounded-xl bg-primary text-primary-foreground">
               <Building2 className="h-4 w-4" />
             </div>
             <div>
@@ -103,15 +103,15 @@ function Index() {
 
       <section className="border-b border-border" style={{ background: "var(--gradient-hero)" }}>
         <div className="mx-auto max-w-[1600px] px-6 py-10 md:py-14">
-          <div className="max-w-2xl text-white">
-            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs backdrop-blur">
-              <span className="h-1.5 w-1.5 rounded-full bg-accent" /> Live AI consultant
+          <div className="max-w-2xl text-foreground">
+            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-border bg-card/70 px-3 py-1 text-xs backdrop-blur">
+              <span className="h-1.5 w-1.5 rounded-full bg-foreground" /> Live AI consultant
             </div>
             <h1 className="font-serif text-3xl font-semibold leading-tight md:text-5xl">
               Find your next Bangkok home<br />
-              <span className="text-accent">in conversation.</span>
+              <span className="text-muted-foreground">in conversation.</span>
             </h1>
-            <p className="mt-3 text-sm text-white/70 md:text-base">
+            <p className="mt-3 text-sm text-muted-foreground md:text-base">
               Tell our AI what matters — area, budget, BTS, vibe — and watch listings narrow from 500 to your perfect match.
             </p>
           </div>
