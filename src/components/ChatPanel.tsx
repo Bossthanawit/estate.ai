@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { Send, Sparkles, Building2 } from "lucide-react";
+import { Send, Sparkles, Building2, Plus } from "lucide-react";
 import { streamChat, type ChatMsg } from "@/lib/streamChat";
 import { toast } from "sonner";
 import type { Filters } from "@/lib/filterProperties";
@@ -16,12 +16,16 @@ export function ChatPanel({
   filters,
   onFiltersChange,
   sessionId,
+  onSessionChange,
+  onNewChat,
   onTotalChange,
   initialAssistantMessage,
 }: {
   filters: Filters;
   onFiltersChange: (f: Filters) => void;
   sessionId?: string | null;
+  onSessionChange?: (id: string | null) => void;
+  onNewChat?: () => void;
   onTotalChange?: (n: number) => void;
   initialAssistantMessage?: string;
 }) {
@@ -54,9 +58,10 @@ export function ChatPanel({
       messages: next,
       filters,
       sessionId,
-      onFilters: ({ filters: f, total }) => {
+      onFilters: ({ filters: f, total, sessionId: sid }) => {
         onFiltersChange(f);
         onTotalChange?.(total);
+        if (sid && sid !== sessionId) onSessionChange?.(sid);
       },
       onDelta: (chunk) => {
         acc += chunk;
@@ -90,6 +95,15 @@ export function ChatPanel({
           </div>
         </div>
         <Sparkles className="h-4 w-4 text-muted-foreground" />
+        {onNewChat && (
+          <button
+            onClick={onNewChat}
+            title="Start a new chat"
+            className="ml-2 inline-flex items-center gap-1 rounded-full border border-border bg-card px-2.5 py-1 text-[11px] font-medium text-foreground/70 hover:border-accent hover:text-foreground transition"
+          >
+            <Plus className="h-3 w-3" /> New
+          </button>
+        )}
       </div>
 
       <div ref={scrollRef} className="chat-scroll flex-1 space-y-4 overflow-y-auto px-5 py-5">

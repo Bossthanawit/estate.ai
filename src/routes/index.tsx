@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState, lazy, Suspense } from "react";
+import { useMemo, useState, lazy, Suspense } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/sonner";
@@ -9,8 +9,6 @@ import { ChatPanel } from "@/components/ChatPanel";
 import { PropertyCard } from "@/components/PropertyCard";
 import { PROPERTY_TYPE_LABEL, type Filters } from "@/lib/filterProperties";
 import { searchProperties } from "@/lib/properties.functions";
-import { supabase } from "@/integrations/supabase/client";
-
 const PropertyMap = lazy(() => import("@/components/PropertyMap").then((m) => ({ default: m.PropertyMap })));
 
 export const Route = createFileRoute("/")({
@@ -28,16 +26,14 @@ function Index() {
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [chatKey, setChatKey] = useState(0);
 
-  // Create a chat session once
-  useEffect(() => {
-    let cancelled = false;
-    supabase.from("chat_sessions").insert({ questionnaire: {} }).select("id").single().then(
-      ({ data }) => { if (!cancelled && data) setSessionId(data.id); },
-      () => undefined,
-    );
-    return () => { cancelled = true; };
-  }, []);
+  // Session is auto-created server-side on first chat message and returned via SSE.
+  const startNewChat = () => {
+    setSessionId(null);
+    setFilters({});
+    setChatKey((k) => k + 1);
+  };
 
   const search = useServerFn(searchProperties);
   const { data, isLoading } = useQuery({
@@ -181,7 +177,14 @@ function Index() {
           </div>
 
           <div className="order-1 lg:order-2 lg:sticky lg:top-24 lg:h-[calc(100vh-7rem)]">
-            <ChatPanel filters={filters} onFiltersChange={setFilters} sessionId={sessionId} />
+            <ChatPanel
+              key={chatKey}
+              filters={filters}
+              onFiltersChange={setFilters}
+              sessionId={sessionId}
+              onSessionChange={setSessionId}
+              onNewChat={startNewChat}
+            />
           </div>
         </div>
       </main>

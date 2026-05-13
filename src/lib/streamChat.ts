@@ -14,7 +14,7 @@ export async function streamChat({
   messages: ChatMsg[];
   filters?: Filters;
   sessionId?: string | null;
-  onFilters?: (data: { filters: Filters; total: number }) => void;
+  onFilters?: (data: { filters: Filters; total: number; sessionId?: string | null }) => void;
   onDelta: (chunk: string) => void;
   onDone: () => void;
   onError: (err: string) => void;
