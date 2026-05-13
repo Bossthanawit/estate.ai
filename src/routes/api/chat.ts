@@ -150,9 +150,6 @@ export const Route = createFileRoute("/api/chat")({
           const prevFilters: SearchFilters = body.filters ?? {};
           const sessionId = body.sessionId ?? null;
 
-          // 1. Extract filters from latest user turn (MCP-style progressive narrowing)
-          const newFilters = await extractFilters(messages, prevFilters);
-
           // 1a. Ensure a chat_session exists server-side so saving never silently fails
           let activeSessionId = sessionId;
           if (!activeSessionId) {
@@ -164,16 +161,21 @@ export const Route = createFileRoute("/api/chat")({
             activeSessionId = created?.id ?? null;
           }
 
-          // 1b. Extract customer profile + persist to chat_sessions.questionnaire
-          let customerProfile: Record<string, unknown> = {};
+          // 1b. Run filter + customer extraction in PARALLEL to halve gateway calls/turn
+          let prevProfile: Record<string, unknown> = {};
           if (activeSessionId) {
             const { data: sess } = await supabaseAdmin
               .from("chat_sessions")
               .select("questionnaire")
               .eq("id", activeSessionId)
               .maybeSingle();
-            const prevProfile = (sess?.questionnaire ?? {}) as Record<string, unknown>;
-            customerProfile = await extractCustomer(messages, prevProfile);
+            prevProfile = (sess?.questionnaire ?? {}) as Record<string, unknown>;
+          }
+          const [newFilters, customerProfile] = await Promise.all([
+            extractFilters(messages, prevFilters),
+            extractCustomer(messages, prevProfile),
+          ]);
+          if (activeSessionId) {
             if (JSON.stringify(customerProfile) !== JSON.stringify(prevProfile)) {
               const { error: upErr } = await supabaseAdmin
                 .from("chat_sessions")
