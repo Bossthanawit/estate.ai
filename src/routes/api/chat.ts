@@ -12,27 +12,30 @@ Style:
 - Ask ONLY ONE question per turn — never stack questions. Avoid making the customer feel interrogated.
 - Use markdown sparingly (bold for key points).
 
-Information to collect naturally over the conversation (one at a time, in a friendly order):
-1. budget
-2. preferred location / area
-3. customer_name
-4. customer_phone
-5. purpose (own / invest / rent out / live)
-6. age
-7. occupation
-8. payment_type (cash / mortgage / installment)
+Information you may quietly collect when the customer mentions it on their own:
+budget, preferred location/area, customer_name, customer_phone, purpose (own/invest/rent/live), age, occupation, payment_type (cash/mortgage/installment).
+
+CRITICAL — Do NOT ask the customer for these variables directly.
+- Never ask "What is your age / occupation / phone number / budget?" etc.
+- Only INFER these from what the customer naturally says in conversation.
+- The only questions you should ask are about their search needs (area, vibe, lifestyle, must-haves) — phrased naturally, never as a survey.
+- If the customer never shares a field, that's fine — leave it blank, never push.
 
 IMPORTANT — Do NOT ask the customer about property_type (house vs condo).
 Instead, analyze their budget and proactively recommend BOTH houses and condos that fit, unless they explicitly say they prefer one.
 
 Behavior:
-- Greet only on the first turn, then ask the first missing piece of info.
-- Acknowledge each new detail the customer shares before asking the next question.
+- Greet only on the first turn, then invite them to share what they're looking for in their own words.
+- Acknowledge each new detail the customer shares before continuing.
 - The system pre-filters the property database for you. The CONTEXT block lists the strictly filtered subset (out of 500 Bangkok listings). Refer ONLY to those listings — never invent property names, prices or details. Provide info strictly based on the database CONTEXT.
 - If the customer seems uncertain, compare 2 options in plain language (e.g. larger living space & value vs. central location & convenience).
 - When the customer shows interest in a project, naturally suggest scheduling a project visit / appointment.
 - Proactively offer to send brochure or price list if they're interested.
-- If filtered count is 0, gently suggest relaxing one criterion (budget, area).`;
+- If filtered count is 0, gently suggest relaxing one criterion (budget, area).
+
+Conversation length & closing:
+- There is NO turn limit. Keep helping the customer for as many turns as they need until they are satisfied (found a property, scheduled a visit, requested a brochure, or simply said goodbye).
+- When the customer signals they have what they need, deliver a warm COMPLETE farewell: thank them by name if known, briefly recap next steps (e.g. "we'll send the brochure", "see you at the viewing"), and wish them well. Do not ask another question after the farewell.`;
 
 type Msg = { role: "user" | "assistant"; content: string };
 type ReqBody = { messages: Msg[]; filters?: SearchFilters; sessionId?: string | null };
@@ -135,21 +138,33 @@ export const Route = createFileRoute("/api/chat")({
           // 1. Extract filters from latest user turn (MCP-style progressive narrowing)
           const newFilters = await extractFilters(messages, prevFilters);
 
+          // 1a. Ensure a chat_session exists server-side so saving never silently fails
+          let activeSessionId = sessionId;
+          if (!activeSessionId) {
+            const { data: created } = await supabaseAdmin
+              .from("chat_sessions")
+              .insert({ questionnaire: {} })
+              .select("id")
+              .single();
+            activeSessionId = created?.id ?? null;
+          }
+
           // 1b. Extract customer profile + persist to chat_sessions.questionnaire
           let customerProfile: Record<string, unknown> = {};
-          if (sessionId) {
+          if (activeSessionId) {
             const { data: sess } = await supabaseAdmin
               .from("chat_sessions")
               .select("questionnaire")
-              .eq("id", sessionId)
+              .eq("id", activeSessionId)
               .maybeSingle();
             const prevProfile = (sess?.questionnaire ?? {}) as Record<string, unknown>;
             customerProfile = await extractCustomer(messages, prevProfile);
             if (JSON.stringify(customerProfile) !== JSON.stringify(prevProfile)) {
-              await supabaseAdmin
+              const { error: upErr } = await supabaseAdmin
                 .from("chat_sessions")
                 .update({ questionnaire: customerProfile as any })
-                .eq("id", sessionId);
+                .eq("id", activeSessionId);
+              if (upErr) console.error("questionnaire update failed", upErr);
             }
           }
 
@@ -157,13 +172,13 @@ export const Route = createFileRoute("/api/chat")({
           const { properties, total } = await searchPropertiesServer({ ...newFilters, limit: 12 });
 
           // 3. Persist log (best-effort)
-          if (sessionId) {
+          if (activeSessionId) {
             const lastUser = [...messages].reverse().find((m) => m.role === "user");
             if (lastUser) {
-              supabaseAdmin
+              const { error: logErr } = await supabaseAdmin
                 .from("chat_logs")
-                .insert({ session_id: sessionId, role: "user", content: lastUser.content, filters_applied: newFilters })
-                .then(() => undefined, () => undefined);
+                .insert({ session_id: activeSessionId, role: "user", content: lastUser.content, filters_applied: newFilters as any });
+              if (logErr) console.error("user log insert failed", logErr);
             }
           }
 
@@ -189,7 +204,7 @@ export const Route = createFileRoute("/api/chat")({
           }
 
           // Wrap stream: send a leading `event: filters` then forward chunks
-          const filtersEvent = `event: filters\ndata: ${JSON.stringify({ filters: newFilters, total })}\n\n`;
+          const filtersEvent = `event: filters\ndata: ${JSON.stringify({ filters: newFilters, total, sessionId: activeSessionId })}\n\n`;
           const upstream = resp.body;
           const stream = new ReadableStream({
             async start(controller) {
@@ -219,11 +234,11 @@ export const Route = createFileRoute("/api/chat")({
                 }
               }
               controller.close();
-              if (sessionId && assistantText.trim()) {
-                supabaseAdmin
+              if (activeSessionId && assistantText.trim()) {
+                const { error: aErr } = await supabaseAdmin
                   .from("chat_logs")
-                  .insert({ session_id: sessionId, role: "assistant", content: assistantText, filters_applied: newFilters as any })
-                  .then(() => undefined, () => undefined);
+                  .insert({ session_id: activeSessionId, role: "assistant", content: assistantText, filters_applied: newFilters as any });
+                if (aErr) console.error("assistant log insert failed", aErr);
               }
             },
           });
