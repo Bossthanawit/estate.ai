@@ -55,15 +55,30 @@ Return ONLY a compact JSON object (no prose, no fences) with any of these keys w
 Merge with these previous filters and KEEP previous values when the user did not change them: __PREV__
 Return JSON only.`;
 
-async function callLovable(model: string, messages: Array<{ role: string; content: string }>, opts?: { stream?: boolean }) {
+async function callLovable(
+  model: string,
+  messages: Array<{ role: string; content: string }>,
+  opts?: { stream?: boolean; retries?: number },
+) {
   const key = process.env.LOVABLE_API_KEY;
   if (!key) throw new Error("LOVABLE_API_KEY missing");
-  const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model, messages, stream: opts?.stream ?? false }),
-  });
-  return resp;
+  const retries = opts?.retries ?? 2;
+  let attempt = 0;
+  let lastResp: Response | null = null;
+  while (attempt <= retries) {
+    const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model, messages, stream: opts?.stream ?? false }),
+    });
+    lastResp = resp;
+    if (resp.status !== 429) return resp;
+    // backoff on rate limit
+    const wait = 600 * Math.pow(2, attempt) + Math.random() * 200;
+    await new Promise((r) => setTimeout(r, wait));
+    attempt++;
+  }
+  return lastResp as Response;
 }
 
 async function extractFilters(messages: Msg[], prev: SearchFilters): Promise<SearchFilters> {
@@ -135,9 +150,6 @@ export const Route = createFileRoute("/api/chat")({
           const prevFilters: SearchFilters = body.filters ?? {};
           const sessionId = body.sessionId ?? null;
 
-          // 1. Extract filters from latest user turn (MCP-style progressive narrowing)
-          const newFilters = await extractFilters(messages, prevFilters);
-
           // 1a. Ensure a chat_session exists server-side so saving never silently fails
           let activeSessionId = sessionId;
           if (!activeSessionId) {
@@ -149,16 +161,21 @@ export const Route = createFileRoute("/api/chat")({
             activeSessionId = created?.id ?? null;
           }
 
-          // 1b. Extract customer profile + persist to chat_sessions.questionnaire
-          let customerProfile: Record<string, unknown> = {};
+          // 1b. Run filter + customer extraction in PARALLEL to halve gateway calls/turn
+          let prevProfile: Record<string, unknown> = {};
           if (activeSessionId) {
             const { data: sess } = await supabaseAdmin
               .from("chat_sessions")
               .select("questionnaire")
               .eq("id", activeSessionId)
               .maybeSingle();
-            const prevProfile = (sess?.questionnaire ?? {}) as Record<string, unknown>;
-            customerProfile = await extractCustomer(messages, prevProfile);
+            prevProfile = (sess?.questionnaire ?? {}) as Record<string, unknown>;
+          }
+          const [newFilters, customerProfile] = await Promise.all([
+            extractFilters(messages, prevFilters),
+            extractCustomer(messages, prevProfile),
+          ]);
+          if (activeSessionId) {
             if (JSON.stringify(customerProfile) !== JSON.stringify(prevProfile)) {
               const { error: upErr } = await supabaseAdmin
                 .from("chat_sessions")
