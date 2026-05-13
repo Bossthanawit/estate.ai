@@ -9,8 +9,6 @@ import { ChatPanel } from "@/components/ChatPanel";
 import { PropertyCard } from "@/components/PropertyCard";
 import { PROPERTY_TYPE_LABEL, type Filters } from "@/lib/filterProperties";
 import { searchProperties } from "@/lib/properties.functions";
-import { supabase } from "@/integrations/supabase/client";
-
 const PropertyMap = lazy(() => import("@/components/PropertyMap").then((m) => ({ default: m.PropertyMap })));
 
 export const Route = createFileRoute("/")({
