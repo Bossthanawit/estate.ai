@@ -196,7 +196,7 @@ function Index() {
                 <ChevronDown className="h-3.5 w-3.5 opacity-60" />
               </button>
             </PopoverTrigger>
-            <PopoverContent align="start" className="w-[320px] p-0">
+            <PopoverContent style={{zIndex:1000}} align="start" className="w-[320px] p-0">
               <div className="border-b border-border px-4 py-3 text-sm font-semibold">Property type</div>
               <div className="max-h-[280px] overflow-auto p-2">
                 {typeOptions.map(({ value, label, icon: Icon }) => {
@@ -227,7 +227,7 @@ function Index() {
                 <ChevronDown className="h-3.5 w-3.5 opacity-60" />
               </button>
             </PopoverTrigger>
-            <PopoverContent align="start" className="w-[300px] p-4 space-y-3">
+            <PopoverContent style={{zIndex:1000}} align="start" className="w-[300px] p-4 space-y-3">
               <div className="text-sm font-semibold">Price (THB)</div>
               <div className="grid grid-cols-2 gap-2">
                 <Input type="number" placeholder="Min" value={filters.minPrice ?? ""} onChange={(e) => setFilters({ ...filters, minPrice: e.target.value ? Number(e.target.value) : undefined })} />
@@ -246,7 +246,7 @@ function Index() {
                 <ChevronDown className="h-3.5 w-3.5 opacity-60" />
               </button>
             </PopoverTrigger>
-            <PopoverContent align="start" className="w-[260px] p-3">
+            <PopoverContent style={{zIndex:1000}} align="start" className="w-[260px] p-3">
               <div className="mb-2 text-sm font-semibold">Minimum bedrooms</div>
               <div className="flex flex-wrap gap-1.5">
                 {[0, 1, 2, 3, 4, 5].map((n) => (
@@ -271,7 +271,7 @@ function Index() {
                 <ChevronDown className="h-3.5 w-3.5 opacity-60" />
               </button>
             </PopoverTrigger>
-            <PopoverContent align="start" className="w-[200px] p-2">
+            <PopoverContent style={{zIndex:1000}} align="start" className="w-[200px] p-2">
               {(["Any", "rent", "sale"] as const).map((v) => (
                 <button
                   key={v}
