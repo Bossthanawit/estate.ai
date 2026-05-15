@@ -1,22 +1,7 @@
-import { useEffect } from "react";
-import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from "react-leaflet";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
+import { useEffect, useState } from "react";
+import { APIProvider, Map, AdvancedMarker, useMap, InfoWindow, Pin } from "@vis.gl/react-google-maps";
 import type { Property } from "@/data/properties";
 import { formatPrice } from "@/lib/filterProperties";
-
-const makeIcon = (active: boolean) => {
-  const color = active ? "#ef4444" : "#9ca3af";
-  const scale = active ? 1.25 : 1;
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="34" height="34" viewBox="0 0 24 24"
-      fill="${color}" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
-      style="filter: drop-shadow(0 3px 4px rgba(0,0,0,0.35)); transform: translate(-50%, -100%) scale(${scale});">
-      <path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/>
-      <circle cx="12" cy="10" r="3" fill="white" stroke="${color}"/>
-    </svg>`;
-  return L.divIcon({ className: "estate-marker", html: svg, iconSize: [0, 0] });
-};
 
 const AREA_CENTERS: Record<string, { lat: number; lng: number; radius: number }> = {
   Asok: { lat: 13.7373, lng: 100.5601, radius: 900 },
@@ -45,33 +30,39 @@ const AREA_CENTERS: Record<string, { lat: number; lng: number; radius: number }>
   Rangsit: { lat: 13.9870, lng: 100.6160, radius: 1800 },
 };
 
-function FlyTo({ id, properties }: { id: string | null; properties: Property[] }) {
+function MapController({
+  properties,
+  focusedId,
+  highlightArea
+}: {
+  properties: Property[];
+  focusedId: string | null;
+  highlightArea?: string | null;
+}) {
   const map = useMap();
   useEffect(() => {
-    if (!id) return;
-    const p = properties.find((x) => x.id === id);
-    if (p) map.flyTo([p.lat, p.lng], 15, { duration: 0.8 });
-  }, [id, properties, map]);
-  return null;
-}
+    if (!map) return;
+    if (focusedId) {
+      const p = properties.find((x) => x.id === focusedId);
+      if (p) {
+        map.panTo({ lat: p.lat, lng: p.lng });
+        map.setZoom(15);
+        return;
+      }
+    }
+    if (highlightArea && AREA_CENTERS[highlightArea]) {
+      const c = AREA_CENTERS[highlightArea];
+      map.panTo({ lat: c.lat, lng: c.lng });
+      map.setZoom(14);
+      return;
+    }
+    if (properties.length > 0 && typeof window !== "undefined" && (window as any).google) {
+      const bounds = new (window as any).google.maps.LatLngBounds();
+      properties.forEach((p) => bounds.extend({ lat: p.lat, lng: p.lng }));
+      map.fitBounds(bounds);
+    }
+  }, [map, properties, focusedId, highlightArea]);
 
-function FlyToArea({ area }: { area: string | null }) {
-  const map = useMap();
-  useEffect(() => {
-    if (!area) return;
-    const c = AREA_CENTERS[area];
-    if (c) map.flyTo([c.lat, c.lng], 14, { duration: 0.9 });
-  }, [area, map]);
-  return null;
-}
-
-function FitBounds({ properties }: { properties: Property[] }) {
-  const map = useMap();
-  useEffect(() => {
-    if (properties.length === 0) return;
-    const bounds = L.latLngBounds(properties.map((p) => [p.lat, p.lng] as [number, number]));
-    map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
-  }, [properties, map]);
   return null;
 }
 
@@ -86,45 +77,59 @@ export function PropertyMap({
   highlightArea?: string | null;
   onSelect: (id: string) => void;
 }) {
-  const zone = highlightArea ? AREA_CENTERS[highlightArea] : null;
+  const [selectedPropId, setSelectedPropId] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => setMounted(true), []);
+
+  if (!mounted) return null;
+
+  const activeId = focusedId || selectedPropId;
+  const activeProp = properties.find((p) => p.id === activeId);
+  const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "";
+
   return (
-    <MapContainer
-      center={[13.7466, 100.5347]}
-      zoom={11}
-      scrollWheelZoom
-      className="h-full w-full"
-      style={{ borderRadius: "1rem" }}
-    >
-      <TileLayer
-        attribution='&copy; OpenStreetMap'
-        url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
-      />
-      {!highlightArea && <FitBounds properties={properties} />}
-      <FlyToArea area={highlightArea ?? null} />
-      <FlyTo id={focusedId} properties={properties} />
-      {zone && (
-        <Circle
-          center={[zone.lat, zone.lng]}
-          radius={zone.radius}
-          pathOptions={{ color: "#ef4444", weight: 2, fillColor: "#ef4444", fillOpacity: 0.12 }}
-        />
-      )}
-      {properties.map((p) => (
-        <Marker
-          key={p.id}
-          position={[p.lat, p.lng]}
-          icon={makeIcon(p.id === focusedId)}
-          eventHandlers={{ click: () => onSelect(p.id) }}
-        >
-          <Popup>
-            <div style={{ minWidth: 180 }}>
-              <strong>{p.name}</strong>
-              <div style={{ fontSize: 12, color: "#666" }}>{p.area_name}</div>
-              <div style={{ marginTop: 4, fontWeight: 600 }}>{formatPrice(p)}</div>
+    <APIProvider apiKey={apiKey}>
+      <Map
+        defaultCenter={{ lat: 13.7466, lng: 100.5347 }}
+        defaultZoom={11}
+        gestureHandling="greedy"
+        disableDefaultUI={true}
+        mapId="DEMO_MAP_ID"
+        style={{ width: '100%', height: '100%', borderRadius: '1rem' }}
+      >
+        <MapController properties={properties} focusedId={focusedId} highlightArea={highlightArea} />
+        
+        {properties.map((p) => {
+          const isActive = p.id === activeId;
+          return (
+            <AdvancedMarker
+              key={p.id}
+              position={{ lat: p.lat, lng: p.lng }}
+              onClick={() => {
+                onSelect(p.id);
+                setSelectedPropId(p.id);
+              }}
+              zIndex={isActive ? 100 : 1}
+            >
+              <Pin background={isActive ? "#ef4444" : "#9ca3af"} borderColor={isActive ? "#b91c1c" : "#4b5563"} glyphColor="#fff" />
+            </AdvancedMarker>
+          );
+        })}
+        
+        {activeProp && (
+          <InfoWindow
+            position={{ lat: activeProp.lat, lng: activeProp.lng }}
+            onCloseClick={() => setSelectedPropId(null)}
+          >
+            <div style={{ minWidth: 180, padding: 4, fontFamily: "sans-serif" }}>
+              <strong>{activeProp.name}</strong>
+              <div style={{ fontSize: 12, color: "#666" }}>{activeProp.area_name}</div>
+              <div style={{ marginTop: 4, fontWeight: 600 }}>{formatPrice(activeProp)}</div>
             </div>
-          </Popup>
-        </Marker>
-      ))}
-    </MapContainer>
+          </InfoWindow>
+        )}
+      </Map>
+    </APIProvider>
   );
 }
