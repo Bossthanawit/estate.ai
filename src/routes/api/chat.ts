@@ -182,6 +182,70 @@ function localExtractFilters(text: string): ExtractionResult {
   return { filters: next, resetRequested, name, phone, age, purpose };
 }
 
+function validatePhone(phone: string): boolean {
+  const digits = phone.replace(/[^0-9]/g, "");
+  return digits.length >= 9 && digits.length <= 15;
+}
+
+function validateAge(age: number): boolean {
+  return age >= 1 && age <= 120;
+}
+
+function validateBudget(budget: number): boolean {
+  return budget >= 1000;
+}
+
+function mergeProfileField(
+  currentQ: Record<string, any>,
+  field: string,
+  newValue: any,
+  confidence: number,
+  source: "directly_stated" | "inferred"
+) {
+  if (newValue === undefined || newValue === null) return;
+
+  // Strict Validation Rules
+  if (field === "phone") {
+    if (typeof newValue !== "string" || !validatePhone(newValue)) return;
+  } else if (field === "age") {
+    const parsedAge = Number(newValue);
+    if (isNaN(parsedAge) || !validateAge(parsedAge)) return;
+    newValue = parsedAge;
+  } else if (field === "budget") {
+    const parsedBudget = Number(newValue);
+    if (isNaN(parsedBudget) || !validateBudget(parsedBudget)) return;
+    newValue = parsedBudget;
+  } else if (field === "property_type") {
+    if (!["condo", "house", "townhouse", "commercial"].includes(newValue)) return;
+  } else if (field === "payment_type") {
+    if (!["rent", "sale"].includes(newValue)) return;
+  } else if (field === "purpose") {
+    if (!["living", "investment"].includes(newValue)) return;
+  }
+
+  // Confidence Guard (Discard if under 0.6)
+  const CONFIDENCE_THRESHOLD = 0.6;
+  if (confidence < CONFIDENCE_THRESHOLD) return;
+
+  if (!currentQ.metadata) {
+    currentQ.metadata = {};
+  }
+
+  const existingMeta = currentQ.metadata[field];
+  const existingConfidence = existingMeta?.confidence ?? 0;
+
+  // Overwrite if field is blank OR new confidence is higher
+  if (
+    currentQ[field] === undefined ||
+    currentQ[field] === null ||
+    currentQ[field] === "" ||
+    confidence > existingConfidence
+  ) {
+    currentQ[field] = newValue;
+    currentQ.metadata[field] = { confidence, source };
+  }
+}
+
 export const Route = createFileRoute("/api/chat")({
   server: {
     handlers: {
@@ -253,18 +317,35 @@ export const Route = createFileRoute("/api/chat")({
           if (activeSessionId && userText.length > 0) {
             try {
               const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_AI_API_KEY });
-              const chatCtx = messages.slice(-3).map(m => `${m.role}: ${m.content}`).join("\n");
+              // Include the entire current chat context so Gemini can see previous questions
+              const chatCtx = messages.map(m => `${m.role}: ${m.content}`).join("\n");
+              
               const exResult = await ai.models.generateContent({
                  model: "gemini-2.5-flash",
-                 contents: `Extract user profile data from the conversation.
-                 Conversation context:
+                 contents: `You are a precise real estate CRM data extractor. 
+                 Analyze the entire conversation context to extract customer profile details.
+                 
+                 CRITICAL SEMANTIC MATCHING FOR NAMES:
+                 If the assistant asks for the user's name or who they are speaking with, and the user responds with a single word or name (e.g., "นัท", "John", "Nattagan"), extract that word as "customer_name" with high confidence.
+                 
+                 CRITICAL PRIVACY RULE:
+                 Do not extract sensitive personal identifiers like passwords, bank account numbers, credit cards, or personal health records. Keep extraction strictly to real estate business needs.
+                 
+                 CONVERSATION HISTORY:
                  ${chatCtx}
                  
-                 Return ONLY a JSON object with newly found data. Keys allowed:
-                 - "customer_name" (string, e.g. "นัท", "John")
+                 Return ONLY a JSON object containing newly found or updated fields. Each field must be an object with keys "v" (value), "c" (confidence score, float between 0.0 and 1.0), and "s" (source: either "directly_stated" or "inferred").
+                 Allowed fields and their types for "v":
+                 - "customer_name" (string)
                  - "phone" (string)
                  - "age" (number)
-                 - "purpose" ("living" or "investment")
+                 - "language" (string: e.g. "Thai", "English", "Chinese", "Japanese")
+                 - "purpose" (string: "living" or "investment")
+                 - "budget" (number, budget in THB)
+                 - "location" (string, e.g. "Ari", "Asok", "Thonglor")
+                 - "property_type" (string: "condo", "house", "townhouse", "commercial")
+                 - "payment_type" (string: "rent", "sale")
+                 
                  If nothing is found, return {}.`,
                  config: { responseMimeType: "application/json", temperature: 0.1 }
               });
@@ -276,26 +357,89 @@ export const Route = createFileRoute("/api/chat")({
             }
           }
 
-          // Update questionnaire locally with new extracted info before checking missing
-          const qUpdate: Record<string, any> = { language: detectedLang };
-          if (newFilters.area) qUpdate.location = newFilters.area;
-          if (newFilters.maxPrice) qUpdate.budget = newFilters.maxPrice;
-          if (newFilters.propertyType) qUpdate.property_type = newFilters.propertyType;
-          if (newFilters.listingType) qUpdate.payment_type = newFilters.listingType;
-          
-          // Regex extraction fallback
-          if (extName) qUpdate.customer_name = extName;
-          if (extPhone) qUpdate.phone = extPhone;
-          if (extAge) qUpdate.age = extAge;
-          if (extPurpose) qUpdate.purpose = extPurpose;
+          // 3.6 Merge UI Explicit Interactions (Confidence: 1.0, Source: directly_stated)
+          if (newFilters.area) {
+            mergeProfileField(currentQ, "location", newFilters.area, 1.0, "directly_stated");
+          }
+          if (newFilters.maxPrice) {
+            mergeProfileField(currentQ, "budget", newFilters.maxPrice, 1.0, "directly_stated");
+          }
+          if (newFilters.propertyType) {
+            mergeProfileField(currentQ, "property_type", newFilters.propertyType, 1.0, "directly_stated");
+          }
+          if (newFilters.listingType) {
+            mergeProfileField(currentQ, "payment_type", newFilters.listingType, 1.0, "directly_stated");
+          }
+          mergeProfileField(currentQ, "language", detectedLang, 1.0, "inferred");
 
-          // AI extraction overrides regex for these specific fields
-          if (aiExtractedProfile.customer_name) qUpdate.customer_name = aiExtractedProfile.customer_name;
-          if (aiExtractedProfile.phone) qUpdate.phone = aiExtractedProfile.phone;
-          if (aiExtractedProfile.age) qUpdate.age = aiExtractedProfile.age;
-          if (aiExtractedProfile.purpose) qUpdate.purpose = aiExtractedProfile.purpose;
-          
-          Object.assign(currentQ, qUpdate);
+          // 3.7 Merge Local Regex Heuristics (Confidence: 0.8, Source: directly_stated)
+          if (extName) mergeProfileField(currentQ, "customer_name", extName, 0.8, "directly_stated");
+          if (extPhone) mergeProfileField(currentQ, "phone", extPhone, 0.8, "directly_stated");
+          if (extAge) mergeProfileField(currentQ, "age", extAge, 0.8, "directly_stated");
+          if (extPurpose) mergeProfileField(currentQ, "purpose", extPurpose, 0.8, "directly_stated");
+
+          // 3.8 Merge Smart AI Profile Extractions
+          const aiKeys = [
+            "customer_name",
+            "phone",
+            "age",
+            "language",
+            "purpose",
+            "budget",
+            "location",
+            "property_type",
+            "payment_type",
+          ] as const;
+
+          for (const key of aiKeys) {
+            const aiField = aiExtractedProfile[key];
+            if (aiField && aiField.v !== undefined && aiField.v !== null) {
+              const confidence = typeof aiField.c === "number" ? aiField.c : 0.7;
+              const source = aiField.s === "directly_stated" ? "directly_stated" : "inferred";
+              mergeProfileField(currentQ, key, aiField.v, confidence, source);
+            }
+          }
+
+          // 3.9 Cross-Session Deduplication using Phone Number
+          if (currentQ.phone) {
+            try {
+              const { data: matchedSessions } = await supabaseAdmin
+                .from("chat_sessions")
+                .select("questionnaire")
+                .eq("questionnaire->>phone", currentQ.phone)
+                .neq("id", activeSessionId)
+                .limit(1);
+
+              if (matchedSessions && matchedSessions.length > 0) {
+                const matched = matchedSessions[0];
+                if (matched && matched.questionnaire) {
+                  const oldQ = matched.questionnaire as Record<string, any>;
+                  const fieldsToMerge = [
+                    "customer_name",
+                    "phone",
+                    "age",
+                    "language",
+                    "purpose",
+                    "budget",
+                    "location",
+                    "property_type",
+                    "payment_type",
+                  ];
+                  for (const f of fieldsToMerge) {
+                    if (oldQ[f] && (!currentQ[f] || currentQ[f] === "")) {
+                      currentQ[f] = oldQ[f];
+                      if (oldQ.metadata?.[f]) {
+                        if (!currentQ.metadata) currentQ.metadata = {};
+                        currentQ.metadata[f] = oldQ.metadata[f];
+                      }
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              console.warn("Cross-session deduplication error:", e);
+            }
+          }
 
           // 4. Two-Pass Query properties
           let { properties, total } = await searchPropertiesServer({ ...newFilters, limit: 12 });

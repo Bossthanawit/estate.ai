@@ -58,6 +58,7 @@ export const Route = createFileRoute("/")({
 
 function Index() {
   const [filters, setFilters] = useState<Filters>({});
+  const [filtersDraft, setFiltersDraft] = useState<Filters>({});
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -71,6 +72,14 @@ function Index() {
   const [isFavoritesOpen, setIsFavoritesOpen] = useState(false);
 
   useEffect(() => {
+    setFiltersDraft(filters);
+  }, [filters]);
+
+  useEffect(() => {
+    setTypeDraft(new Set(typesApplied));
+  }, [typesApplied]);
+
+  useEffect(() => {
     setPage(1);
   }, [filters, typesApplied]);
 
@@ -78,6 +87,7 @@ function Index() {
   const startNewChat = () => {
     setSessionId(null);
     setFilters({});
+    setTypesApplied(new Set());
     setChatKey((k) => k + 1);
   };
 
@@ -132,6 +142,25 @@ function Index() {
     return m;
   }, [allResults]);
 
+  const isFiltersDirty = useMemo(() => {
+    const allKeys = new Set([...Object.keys(filters), ...Object.keys(filtersDraft)]) as Set<keyof Filters>;
+    for (const key of allKeys) {
+      if (filters[key] !== filtersDraft[key]) {
+        return true;
+      }
+    }
+    if (typeDraft.size !== typesApplied.size) return true;
+    for (const val of typeDraft) {
+      if (!typesApplied.has(val)) return true;
+    }
+    return false;
+  }, [filters, filtersDraft, typeDraft, typesApplied]);
+
+  const handleApplyAllFilters = () => {
+    setFilters(filtersDraft);
+    setTypesApplied(new Set(typeDraft));
+  };
+
   const toggleTypeDraft = (v: Property["propertyType"]) => {
     setTypeDraft((prev) => {
       const n = new Set(prev);
@@ -141,12 +170,10 @@ function Index() {
     });
   };
   const applyTypeFilters = () => {
-    setTypesApplied(new Set(typeDraft));
     setTypeOpen(false);
   };
   const clearTypeFilters = () => {
     setTypeDraft(new Set());
-    setTypesApplied(new Set());
   };
   const applyLocation = () => {
     setFilters({ ...filters, area: locationInput.trim() || undefined });
@@ -293,15 +320,12 @@ function Index() {
           {/* Property type */}
           <Popover
             open={typeOpen}
-            onOpenChange={(o) => {
-              setTypeOpen(o);
-              if (o) setTypeDraft(new Set(typesApplied));
-            }}
+            onOpenChange={setTypeOpen}
           >
             <PopoverTrigger asChild>
               <button className="inline-flex h-10 shrink-0 items-center gap-2 rounded-full border border-border bg-card px-4 text-sm font-medium shadow-sm hover:bg-secondary/60">
                 <Building className="h-4 w-4" />
-                {typesApplied.size === 0 ? "Property type" : `Property type · ${typesApplied.size}`}
+                {typeDraft.size === 0 ? "Property type" : `Property type · ${typeDraft.size}`}
                 <ChevronDown className="h-3.5 w-3.5 opacity-60" />
               </button>
             </PopoverTrigger>
@@ -343,8 +367,8 @@ function Index() {
             <PopoverTrigger asChild>
               <button className="inline-flex h-10 shrink-0 items-center gap-2 rounded-full border border-border bg-card px-4 text-sm font-medium shadow-sm hover:bg-secondary/60">
                 <DollarSign className="h-4 w-4" />
-                {filters.maxPrice || filters.minPrice
-                  ? `฿${(filters.minPrice ?? 0).toLocaleString()} – ${filters.maxPrice ? "฿" + filters.maxPrice.toLocaleString() : "∞"}`
+                {filtersDraft.maxPrice || filtersDraft.minPrice
+                  ? `฿${(filtersDraft.minPrice ?? 0).toLocaleString()} – ${filtersDraft.maxPrice ? "฿" + filtersDraft.maxPrice.toLocaleString() : "∞"}`
                   : "Price"}
                 <ChevronDown className="h-3.5 w-3.5 opacity-60" />
               </button>
@@ -359,10 +383,10 @@ function Index() {
                 <Input
                   type="number"
                   placeholder="Min"
-                  value={filters.minPrice ?? ""}
+                  value={filtersDraft.minPrice ?? ""}
                   onChange={(e) =>
-                    setFilters({
-                      ...filters,
+                    setFiltersDraft({
+                      ...filtersDraft,
                       minPrice: e.target.value ? Number(e.target.value) : undefined,
                     })
                   }
@@ -370,10 +394,10 @@ function Index() {
                 <Input
                   type="number"
                   placeholder="Max"
-                  value={filters.maxPrice ?? ""}
+                  value={filtersDraft.maxPrice ?? ""}
                   onChange={(e) =>
-                    setFilters({
-                      ...filters,
+                    setFiltersDraft({
+                      ...filtersDraft,
                       maxPrice: e.target.value ? Number(e.target.value) : undefined,
                     })
                   }
@@ -382,7 +406,7 @@ function Index() {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => setFilters({ ...filters, minPrice: undefined, maxPrice: undefined })}
+                onClick={() => setFiltersDraft({ ...filtersDraft, minPrice: undefined, maxPrice: undefined })}
               >
                 Clear
               </Button>
@@ -394,7 +418,7 @@ function Index() {
             <PopoverTrigger asChild>
               <button className="inline-flex h-10 shrink-0 items-center gap-2 rounded-full border border-border bg-card px-4 text-sm font-medium shadow-sm hover:bg-secondary/60">
                 <BedDouble className="h-4 w-4" />
-                {filters.bedrooms != null ? `${filters.bedrooms}+ bed` : "Bedrooms"}
+                {filtersDraft.bedrooms != null ? `${filtersDraft.bedrooms}+ bed` : "Bedrooms"}
                 <ChevronDown className="h-3.5 w-3.5 opacity-60" />
               </button>
             </PopoverTrigger>
@@ -405,9 +429,9 @@ function Index() {
                   <button
                     key={n}
                     onClick={() =>
-                      setFilters({ ...filters, bedrooms: filters.bedrooms === n ? undefined : n })
+                      setFiltersDraft({ ...filtersDraft, bedrooms: filtersDraft.bedrooms === n ? undefined : n })
                     }
-                    className={`h-9 min-w-12 rounded-full border px-3 text-sm font-medium ${filters.bedrooms === n ? "border-foreground bg-foreground text-background" : "border-border bg-card hover:bg-secondary/60"}`}
+                    className={`h-9 min-w-12 rounded-full border px-3 text-sm font-medium ${filtersDraft.bedrooms === n ? "border-foreground bg-foreground text-background" : "border-border bg-card hover:bg-secondary/60"}`}
                   >
                     {n === 0 ? "Any" : `${n}+`}
                   </button>
@@ -421,8 +445,8 @@ function Index() {
             <PopoverTrigger asChild>
               <button className="inline-flex h-10 shrink-0 items-center gap-2 rounded-full border border-border bg-card px-4 text-sm font-medium shadow-sm hover:bg-secondary/60">
                 <Tag className="h-4 w-4" />
-                {filters.listingType && filters.listingType !== "Any"
-                  ? `For ${filters.listingType}`
+                {filtersDraft.listingType && filtersDraft.listingType !== "Any"
+                  ? `For ${filtersDraft.listingType}`
                   : "For rent / sale"}
                 <ChevronDown className="h-3.5 w-3.5 opacity-60" />
               </button>
@@ -431,8 +455,8 @@ function Index() {
               {(["Any", "rent", "sale"] as const).map((v) => (
                 <button
                   key={v}
-                  onClick={() => setFilters({ ...filters, listingType: v })}
-                  className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm hover:bg-secondary/60 ${(filters.listingType ?? "Any") === v ? "font-semibold" : ""}`}
+                  onClick={() => setFiltersDraft({ ...filtersDraft, listingType: v })}
+                  className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm hover:bg-secondary/60 ${(filtersDraft.listingType ?? "Any") === v ? "font-semibold" : ""}`}
                 >
                   {v === "Any" ? "Any" : `For ${v}`}
                 </button>
@@ -443,37 +467,55 @@ function Index() {
           {/* Near transit */}
           <button
             onClick={() =>
-              setFilters({ ...filters, nearTransit: filters.nearTransit ? undefined : true })
+              setFiltersDraft({ ...filtersDraft, nearTransit: filtersDraft.nearTransit ? undefined : true })
             }
-            className={`inline-flex h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-sm font-medium shadow-sm ${filters.nearTransit ? "border-foreground bg-foreground text-background" : "border-border bg-card hover:bg-secondary/60"}`}
+            className={`inline-flex h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-sm font-medium shadow-sm ${filtersDraft.nearTransit ? "border-foreground bg-foreground text-background" : "border-border bg-card hover:bg-secondary/60"}`}
           >
             <Train className="h-4 w-4" />
             Near BTS / MRT
-            {filters.nearTransit && <span className="h-1.5 w-1.5 rounded-full bg-destructive" />}
+            {filtersDraft.nearTransit && <span className="h-1.5 w-1.5 rounded-full bg-destructive" />}
           </button>
 
           {/* Near university */}
           <button
             onClick={() =>
-              setFilters({ ...filters, nearUniversity: filters.nearUniversity ? undefined : true })
+              setFiltersDraft({ ...filtersDraft, nearUniversity: filtersDraft.nearUniversity ? undefined : true })
             }
-            className={`inline-flex h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-sm font-medium shadow-sm ${filters.nearUniversity ? "border-foreground bg-foreground text-background" : "border-border bg-card hover:bg-secondary/60"}`}
+            className={`inline-flex h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-sm font-medium shadow-sm ${filtersDraft.nearUniversity ? "border-foreground bg-foreground text-background" : "border-border bg-card hover:bg-secondary/60"}`}
           >
             <GraduationCap className="h-4 w-4" />
             Near university
-            {filters.nearUniversity && <span className="h-1.5 w-1.5 rounded-full bg-destructive" />}
+            {filtersDraft.nearUniversity && <span className="h-1.5 w-1.5 rounded-full bg-destructive" />}
           </button>
 
           {/* Near mall */}
           <button
             onClick={() =>
-              setFilters({ ...filters, nearMall: filters.nearMall ? undefined : true })
+              setFiltersDraft({ ...filtersDraft, nearMall: filtersDraft.nearMall ? undefined : true })
             }
-            className={`inline-flex h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-sm font-medium shadow-sm ${filters.nearMall ? "border-foreground bg-foreground text-background" : "border-border bg-card hover:bg-secondary/60"}`}
+            className={`inline-flex h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-sm font-medium shadow-sm ${filtersDraft.nearMall ? "border-foreground bg-foreground text-background" : "border-border bg-card hover:bg-secondary/60"}`}
           >
             <ShoppingBag className="h-4 w-4" />
             Near mall
-            {filters.nearMall && <span className="h-1.5 w-1.5 rounded-full bg-destructive" />}
+            {filtersDraft.nearMall && <span className="h-1.5 w-1.5 rounded-full bg-destructive" />}
+          </button>
+
+          {/* Apply button */}
+          <button
+            onClick={handleApplyAllFilters}
+            className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full px-5 text-sm font-semibold shadow-sm transition-all duration-200 cursor-pointer ${
+              isFiltersDirty
+                ? "bg-black text-white hover:bg-neutral-700 ring-2 ring-black/10"
+                : "bg-black text-white hover:bg-neutral-700"
+            }`}
+          >
+            Apply
+            {isFiltersDirty && (
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-400"></span>
+              </span>
+            )}
           </button>
 
           <button className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-border bg-card shadow-sm hover:bg-secondary/60">
